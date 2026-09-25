@@ -16,11 +16,10 @@
   .topbar {
     display: flex; align-items: center; justify-content: space-between;
     padding: 16px 20px; background: var(--card); border-bottom: 1px solid var(--border);
-    position: sticky; top: 0; z-index: 10;
+    position: sticky; top: 0; z-index: 10; flex-wrap: wrap; gap: 8px;
   }
   .topbar h1 { font-size: 20px; margin: 0; color: var(--accent); }
-  .topbar .who { font-size: 13px; color: var(--muted); }
-  .topbar .who button { margin-left: 8px; }
+  .topbar nav { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); }
   main { padding: 20px; }
   button {
     background: var(--accent); color: white; border: none; padding: 8px 14px;
@@ -29,6 +28,8 @@
   button:hover { background: var(--accent-hover); }
   button.secondary { background: none; color: var(--muted); padding: 4px 8px; font-size: 13px; }
   button.danger { background: none; color: var(--danger); padding: 4px 8px; font-size: 13px; }
+  button.tab { background: none; color: var(--muted); padding: 4px 10px; font-weight: 600; }
+  button.tab.active { color: var(--accent); }
   button:disabled { opacity: 0.6; cursor: default; }
   .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
   .post-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
@@ -46,6 +47,20 @@
   .muted { color: var(--muted); font-size: 13px; }
   .error { color: var(--danger); font-size: 13px; margin-bottom: 10px; }
   .name-gate { max-width: 360px; margin: 60px auto; text-align: center; }
+  .conv-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px; border-bottom: 1px solid var(--border); cursor: pointer;
+  }
+  .conv-item:hover { background: #f9fafb; }
+  .conv-item:last-child { border-bottom: none; }
+  .bubble-row { display: flex; margin-bottom: 8px; }
+  .bubble-row.mine { justify-content: flex-end; }
+  .bubble {
+    max-width: 75%; padding: 8px 12px; border-radius: 14px; font-size: 14px;
+    background: #f0f0f3;
+  }
+  .bubble-row.mine .bubble { background: var(--accent); color: white; }
+  .thread-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 </style>
 </head>
 <body>
@@ -58,9 +73,18 @@
   </div>
 
 <script>
-const USER_KEY = 'social_app_user_v1';
+const USER_KEY = 'social_app_user_v2';
+const TOKEN_KEY = 'social_app_token_v2';
 function getUser() { return localStorage.getItem(USER_KEY); }
-function setUser(name) { localStorage.setItem(USER_KEY, name); }
+function getToken() { return localStorage.getItem(TOKEN_KEY); }
+function setSession(name, token) {
+  localStorage.setItem(USER_KEY, name);
+  localStorage.setItem(TOKEN_KEY, token);
+}
+function clearSession() {
+  localStorage.removeItem(USER_KEY);
+  localStorage.removeItem(TOKEN_KEY);
+}
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -85,7 +109,6 @@ function timeAgo(ts) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-// ---------- API ----------
 async function api(path, { method = 'GET', body } = {}) {
   const res = await fetch(`/.netlify/functions/${path}`, {
     method,
@@ -101,42 +124,69 @@ async function api(path, { method = 'GET', body } = {}) {
 const mainEl = document.getElementById('main');
 const whoBox = document.getElementById('whoBox');
 
+let currentView = 'feed'; // 'feed' | 'messages'
+let currentThreadWith = null;
+
 function renderWho() {
   whoBox.innerHTML = '';
   const user = getUser();
   if (!user) return;
   whoBox.append(
-    `Posting as ${user}`,
-    el('button', { class: 'secondary', onclick: () => { localStorage.removeItem(USER_KEY); render(); } }, 'Switch name')
+    el('nav', {},
+      el('button', { class: `tab ${currentView === 'feed' ? 'active' : ''}`, onclick: () => { currentView = 'feed'; render(); } }, 'Feed'),
+      el('button', { class: `tab ${currentView === 'messages' ? 'active' : ''}`, onclick: () => { currentView = 'messages'; currentThreadWith = null; render(); } }, 'Messages'),
+      el('span', { class: 'muted' }, ` · ${user} `),
+      el('button', { class: 'secondary', onclick: () => { clearSession(); render(); } }, 'Switch name')
+    )
   );
 }
 
 function render() {
   renderWho();
   if (!getUser()) return renderNameGate();
+  if (currentView === 'messages') return renderMessages();
   renderFeed();
 }
 
 function renderNameGate() {
   mainEl.innerHTML = '';
   const input = el('input', { placeholder: 'Pick a display name', maxlength: '24' });
-  const go = () => {
-    const name = input.value.trim();
-    if (!name) return;
-    setUser(name);
-    render();
-  };
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  const errorBox = el('div', { class: 'error' });
+  const goBtn = el('button', {
+    onclick: async () => {
+      const name = input.value.trim();
+      if (!name) return;
+      errorBox.textContent = '';
+      goBtn.disabled = true;
+      try {
+        const result = await api('username', { method: 'POST', body: { username: name, token: getToken() } });
+        if (result.success) {
+          setSession(name, result.token);
+          render();
+        } else {
+          errorBox.textContent = result.error || 'That name is taken';
+        }
+      } catch (err) {
+        errorBox.textContent = err.message;
+      } finally {
+        goBtn.disabled = false;
+      }
+    },
+  }, 'Continue');
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') goBtn.click(); });
+
   mainEl.append(
     el('div', { class: 'card name-gate' },
       el('h2', {}, 'Welcome 👋'),
-      el('p', { class: 'muted' }, "There's no account system here — just pick a name to post under. Everyone visiting this site shares the same feed."),
+      el('p', { class: 'muted' }, 'Pick a display name. Once someone claims a name, nobody else can use it.'),
       input,
-      el('button', { onclick: go }, 'Continue')
+      errorBox,
+      goBtn
     )
   );
 }
 
+// ---------- Feed ----------
 async function renderFeed() {
   mainEl.innerHTML = '';
 
@@ -184,12 +234,18 @@ function renderPostCard(post) {
   const likeBtn = el('button', {
     class: liked ? 'liked secondary' : 'secondary',
     onclick: async () => {
-      likeBtn.disabled = true;
       const result = await api('like', { method: 'POST', body: { postId: post.id, user } });
       post.likedBy = result.likedBy;
-      renderFeedSoft();
+      renderFeed();
     },
   }, `♥ ${post.likedBy.length}`);
+
+  const messageBtn = post.author !== user
+    ? el('button', {
+        class: 'secondary',
+        onclick: () => { currentView = 'messages'; currentThreadWith = post.author; render(); },
+      }, 'Message')
+    : null;
 
   const deleteBtn = post.author === user
     ? el('button', {
@@ -223,14 +279,123 @@ function renderPostCard(post) {
       el('span', { class: 'timestamp' }, timeAgo(post.createdAt))
     ),
     el('div', { class: 'post-content' }, post.content),
-    el('div', { class: 'post-actions' }, likeBtn, deleteBtn),
+    el('div', { class: 'post-actions' }, likeBtn, messageBtn, deleteBtn),
     commentsWrap,
     el('div', { style: 'margin-top:10px' }, commentInput, commentBtn)
   );
 }
 
-// Lightweight re-render used after a like, so we don't refetch the whole feed
-function renderFeedSoft() { renderFeed(); }
+// ---------- Messages ----------
+async function renderMessages() {
+  mainEl.innerHTML = '';
+  const user = getUser();
+
+  if (currentThreadWith) {
+    return renderThread(user, currentThreadWith);
+  }
+
+  const startInput = el('input', { placeholder: 'Message someone by username…' });
+  const startBtn = el('button', {
+    onclick: () => {
+      const name = startInput.value.trim();
+      if (!name || name === user) return;
+      currentThreadWith = name;
+      renderMessages();
+    },
+  }, 'Open chat');
+  startInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') startBtn.click(); });
+
+  mainEl.append(el('div', { class: 'card' }, startInput, startBtn));
+
+  const listEl = el('div', { class: 'card' }, 'Loading conversations…');
+  mainEl.append(listEl);
+
+  try {
+    const messages = await api(`messages?me=${encodeURIComponent(user)}`);
+    listEl.innerHTML = '';
+
+    const byPartner = new Map();
+    messages.forEach((m) => {
+      const partner = m.from === user ? m.to : m.from;
+      const existing = byPartner.get(partner);
+      if (!existing || m.createdAt > existing.createdAt) byPartner.set(partner, m);
+    });
+    const conversations = [...byPartner.entries()].sort((a, b) => b[1].createdAt - a[1].createdAt);
+
+    if (conversations.length === 0) {
+      listEl.append(el('p', { class: 'muted' }, 'No conversations yet — start one above.'));
+    }
+    conversations.forEach(([partner, lastMsg]) => {
+      listEl.append(
+        el('div', { class: 'conv-item', onclick: () => { currentThreadWith = partner; renderMessages(); } },
+          el('div', {},
+            el('div', { class: 'username' }, partner),
+            el('div', { class: 'muted' }, lastMsg.content.slice(0, 40) + (lastMsg.content.length > 40 ? '…' : ''))
+          ),
+          el('span', { class: 'timestamp' }, timeAgo(lastMsg.createdAt))
+        )
+      );
+    });
+  } catch (err) {
+    listEl.innerHTML = '';
+    listEl.append(el('p', { class: 'error' }, err.message));
+  }
+}
+
+async function renderThread(user, partner) {
+  mainEl.innerHTML = '';
+
+  mainEl.append(
+    el('div', { class: 'thread-header' },
+      el('button', { class: 'secondary', onclick: () => { currentThreadWith = null; renderMessages(); } }, '← Back'),
+      el('span', { class: 'username' }, partner)
+    )
+  );
+
+  const threadEl = el('div', { class: 'card' }, 'Loading…');
+  mainEl.append(threadEl);
+
+  const inputRow = el('div', { class: 'card' });
+  const msgInput = el('textarea', { rows: 2, placeholder: `Message ${partner}…` });
+  const errorBox = el('div', { class: 'error' });
+  const sendBtn = el('button', {
+    onclick: async () => {
+      if (!msgInput.value.trim()) return;
+      errorBox.textContent = '';
+      sendBtn.disabled = true;
+      try {
+        await api('messages', { method: 'POST', body: { from: user, to: partner, content: msgInput.value } });
+        msgInput.value = '';
+        renderThread(user, partner);
+      } catch (err) {
+        errorBox.textContent = err.message;
+      } finally {
+        sendBtn.disabled = false;
+      }
+    },
+  }, 'Send');
+  inputRow.append(msgInput, errorBox, sendBtn);
+  mainEl.append(inputRow);
+
+  try {
+    const messages = await api(`messages?me=${encodeURIComponent(user)}&with=${encodeURIComponent(partner)}`);
+    threadEl.innerHTML = '';
+    if (messages.length === 0) {
+      threadEl.append(el('p', { class: 'muted' }, `No messages yet with ${partner}.`));
+    }
+    messages.forEach((m) => {
+      const mine = m.from === user;
+      threadEl.append(
+        el('div', { class: `bubble-row ${mine ? 'mine' : ''}` },
+          el('div', { class: 'bubble' }, m.content)
+        )
+      );
+    });
+  } catch (err) {
+    threadEl.innerHTML = '';
+    threadEl.append(el('p', { class: 'error' }, err.message));
+  }
+}
 
 render();
 </script>
