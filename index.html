@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>social.app</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #ffffff; --border: #e2e4e9; --text: #1a1d23;
+    --muted: #6b7280; --accent: #4f46e5; --accent-hover: #4338ca; --danger: #dc2626;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); }
+  #app { max-width: 600px; margin: 0 auto; min-height: 100vh; }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px; background: var(--card); border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 10;
+  }
+  .topbar h1 { font-size: 20px; margin: 0; color: var(--accent); }
+  .topbar .who { font-size: 13px; color: var(--muted); }
+  .topbar .who button { margin-left: 8px; }
+  main { padding: 20px; }
+  button {
+    background: var(--accent); color: white; border: none; padding: 8px 14px;
+    border-radius: 8px; font-size: 14px; cursor: pointer;
+  }
+  button:hover { background: var(--accent-hover); }
+  button.secondary { background: none; color: var(--muted); padding: 4px 8px; font-size: 13px; }
+  button.danger { background: none; color: var(--danger); padding: 4px 8px; font-size: 13px; }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+  .post-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .username { font-weight: 600; }
+  .timestamp { color: var(--muted); font-size: 12px; }
+  .post-content { white-space: pre-wrap; margin: 8px 0; line-height: 1.4; }
+  .post-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .post-actions button.liked { color: var(--danger); font-weight: 600; }
+  textarea, input {
+    width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 8px;
+    font-size: 14px; font-family: inherit; margin-bottom: 10px;
+  }
+  .comment { padding: 8px 0; border-top: 1px solid var(--border); font-size: 14px; }
+  .comment .username { font-size: 13px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .error { color: var(--danger); font-size: 13px; margin-bottom: 10px; }
+  .name-gate { max-width: 360px; margin: 60px auto; text-align: center; }
+</style>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <h1>social.app</h1>
+      <div class="who" id="whoBox"></div>
+    </header>
+    <main id="main">Loading…</main>
+  </div>
+
+<script>
+const USER_KEY = 'social_app_user_v1';
+function getUser() { return localStorage.getItem(USER_KEY); }
+function setUser(name) { localStorage.setItem(USER_KEY, name); }
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
+    else node.setAttribute(k, v);
+  }
+  for (const child of children) {
+    if (child == null) continue;
+    node.append(child instanceof Node ? child : document.createTextNode(child));
+  }
+  return node;
+}
+
+function timeAgo(ts) {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+// ---------- API ----------
+async function api(path, { method = 'GET', body } = {}) {
+  const res = await fetch(`/.netlify/functions/${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 204) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+const mainEl = document.getElementById('main');
+const whoBox = document.getElementById('whoBox');
+
+function renderWho() {
+  whoBox.innerHTML = '';
+  const user = getUser();
+  if (!user) return;
+  whoBox.append(
+    `Posting as ${user}`,
+    el('button', { class: 'secondary', onclick: () => { localStorage.removeItem(USER_KEY); render(); } }, 'Switch name')
+  );
+}
+
+function render() {
+  renderWho();
+  if (!getUser()) return renderNameGate();
+  renderFeed();
+}
+
+function renderNameGate() {
+  mainEl.innerHTML = '';
+  const input = el('input', { placeholder: 'Pick a display name', maxlength: '24' });
+  const go = () => {
+    const name = input.value.trim();
+    if (!name) return;
+    setUser(name);
+    render();
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  mainEl.append(
+    el('div', { class: 'card name-gate' },
+      el('h2', {}, 'Welcome 👋'),
+      el('p', { class: 'muted' }, "There's no account system here — just pick a name to post under. Everyone visiting this site shares the same feed."),
+      input,
+      el('button', { onclick: go }, 'Continue')
+    )
+  );
+}
+
+async function renderFeed() {
+  mainEl.innerHTML = '';
+
+  const contentInput = el('textarea', { rows: 3, placeholder: "What's happening?" });
+  const postError = el('div', { class: 'error' });
+  const postBtn = el('button', {
+    onclick: async () => {
+      postError.textContent = '';
+      if (!contentInput.value.trim()) return;
+      postBtn.disabled = true;
+      try {
+        await api('posts', { method: 'POST', body: { author: getUser(), content: contentInput.value } });
+        contentInput.value = '';
+        renderFeed();
+      } catch (err) {
+        postError.textContent = err.message;
+      } finally {
+        postBtn.disabled = false;
+      }
+    },
+  }, 'Post');
+
+  mainEl.append(el('div', { class: 'card' }, contentInput, postError, postBtn));
+
+  const listEl = el('div', {}, 'Loading posts…');
+  mainEl.append(listEl);
+
+  try {
+    const posts = await api('posts');
+    listEl.innerHTML = '';
+    if (posts.length === 0) {
+      listEl.append(el('p', { class: 'muted' }, 'No posts yet — write the first one!'));
+    }
+    posts.forEach((p) => listEl.append(renderPostCard(p)));
+  } catch (err) {
+    listEl.innerHTML = '';
+    listEl.append(el('p', { class: 'error' }, err.message));
+  }
+}
+
+function renderPostCard(post) {
+  const user = getUser();
+  const liked = post.likedBy.includes(user);
+
+  const likeBtn = el('button', {
+    class: liked ? 'liked secondary' : 'secondary',
+    onclick: async () => {
+      likeBtn.disabled = true;
+      const result = await api('like', { method: 'POST', body: { postId: post.id, user } });
+      post.likedBy = result.likedBy;
+      renderFeedSoft();
+    },
+  }, `♥ ${post.likedBy.length}`);
+
+  const deleteBtn = post.author === user
+    ? el('button', {
+        class: 'danger',
+        onclick: async () => {
+          await api(`posts?id=${encodeURIComponent(post.id)}&author=${encodeURIComponent(user)}`, { method: 'DELETE' });
+          renderFeed();
+        },
+      }, 'Delete')
+    : null;
+
+  const commentsWrap = el('div');
+  post.comments.forEach((c) => {
+    commentsWrap.append(el('div', { class: 'comment' }, el('span', { class: 'username' }, c.author), ': ', c.content));
+  });
+
+  const commentInput = el('input', { placeholder: 'Write a comment…' });
+  const commentBtn = el('button', {
+    class: 'secondary',
+    onclick: async () => {
+      if (!commentInput.value.trim()) return;
+      await api('comment', { method: 'POST', body: { postId: post.id, author: user, content: commentInput.value } });
+      renderFeed();
+    },
+  }, 'Comment');
+  commentInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') commentBtn.click(); });
+
+  return el('div', { class: 'card' },
+    el('div', { class: 'post-header' },
+      el('span', { class: 'username' }, post.author),
+      el('span', { class: 'timestamp' }, timeAgo(post.createdAt))
+    ),
+    el('div', { class: 'post-content' }, post.content),
+    el('div', { class: 'post-actions' }, likeBtn, deleteBtn),
+    commentsWrap,
+    el('div', { style: 'margin-top:10px' }, commentInput, commentBtn)
+  );
+}
+
+// Lightweight re-render used after a like, so we don't refetch the whole feed
+function renderFeedSoft() { renderFeed(); }
+
+render();
+</script>
+</body>
+</html>
